@@ -89,12 +89,12 @@ func (receiver *GoogleDrive3k) GetAbout() *drive.About {
 
 /*Files*/
 
-func (receiver *GoogleDrive3k) GetFileById(fileId string) *drive.File {
-	file, err := receiver.Service.Files.Get(fileId).Fields("*").Do()
+func (receiver *GoogleDrive3k) GetFileById(fileId string) (*drive.File, error) {
+	file, err := receiver.Service.Files.Get(fileId).Fields("*").SupportsTeamDrives(true).SupportsAllDrives(true).Do()
 	if err != nil {
 		if strings.Contains(err.Error(), "File not found:") {
 			log.Println(err.Error())
-			return nil
+			return nil, err
 		}
 		log.Println(err.Error())
 		log.Println("Error encountered Sleeping for 2 seconds...")
@@ -102,7 +102,7 @@ func (receiver *GoogleDrive3k) GetFileById(fileId string) *drive.File {
 		return receiver.GetFileById(fileId)
 	}
 	log.Printf("Returned [%s] -> \"%s\"\n", fileId, file.Name)
-	return file
+	return file, nil
 }
 
 func (receiver *GoogleDrive3k) QueryFiles(q string) []*drive.File {
@@ -133,16 +133,18 @@ func (receiver *GoogleDrive3k) QueryFiles(q string) []*drive.File {
 	return allFiles
 }
 
-func (receiver *GoogleDrive3k) MoveFile(fileId, parentFolderId string) *drive.File {
+func (receiver *GoogleDrive3k) MoveFile(fileId, parentFolderId string) (*drive.File, error) {
 	updatedDriveFile, err := receiver.Service.Files.Update(
 		fileId,
 		&drive.File{}).
+		SupportsTeamDrives(true).
 		AddParents(parentFolderId).Do()
 	if err != nil {
-		log.Fatalf(err.Error())
+		log.Println(err.Error())
+		return nil, err
 	}
 	log.Printf("Drive file [%s] moved to --> [%s]\n", fileId, parentFolderId)
-	return updatedDriveFile
+	return updatedDriveFile, nil
 }
 
 func (receiver *GoogleDrive3k) CopyFile(fileId, parentFolderId, fileName string) *drive.File {
@@ -205,6 +207,7 @@ func (receiver *GoogleDrive3k) ChangeFileOwnerWorker(newOwner, fileId string, do
 }
 
 func (receiver *GoogleDrive3k) UploadFile(absoluteFilePath, parentFolderId string) (*drive.File, error) {
+
 	byteCount := func(b int64) string {
 		const unit = 1000
 		if b < unit {
@@ -219,24 +222,30 @@ func (receiver *GoogleDrive3k) UploadFile(absoluteFilePath, parentFolderId strin
 			float64(b)/float64(div), "kMGTPE"[exp])
 	}
 	reader, err := os.Open(absoluteFilePath)
+	defer reader.Close()
+
 	if err != nil {
 		log.Fatalf(err.Error())
 		panic(err)
 	}
+
 	fileInfo, _ := reader.Stat()
 	var metaData = &drive.File{Name: fileInfo.Name()}
+
 	if parentFolderId != "" {
 		var parents []string
 		parents = append(parents, parentFolderId)
 		metaData.Parents = parents
 	}
+
 	progressUpdater := googleapi.ProgressUpdater(func(now, size int64) {
 		log.Println("CurrentFile:",
 			absoluteFilePath,
 			"["+byteCount(now), "of", byteCount(fileInfo.Size())+"]")
 	})
+
 	result, err := receiver.Service.Files.Create(metaData).Media(reader).ProgressUpdater(progressUpdater).Do()
-	reader.Close()
+
 	return result, err
 }
 
@@ -244,12 +253,12 @@ func (receiver *GoogleDrive3k) UploadFile(absoluteFilePath, parentFolderId strin
 func (receiver *GoogleDrive3k) CopyFolder(sourceFolderId, newSourceFolderName, parentFolderId string) {
 
 	/*Get source folder*/
-	sourceFolder := receiver.GetFileById(sourceFolderId)
+	sourceFolder, _ := receiver.GetFileById(sourceFolderId)
 	sourceFolder.Name = newSourceFolderName
 	msg := "Copy of [" + sourceFolder.Name + "]"
 
 	/*Create a copy source folder*/
-	sourceCopy := receiver.CreateFolder(sourceFolder.Name, parentFolderId, nil, false)
+	sourceCopy, _ := receiver.CreateFolder(sourceFolder.Name, parentFolderId, nil)
 
 	/*FileIdList that will be copied*/
 	var filesToCopy [][]string
@@ -300,7 +309,7 @@ func (receiver *GoogleDrive3k) CopyFolder(sourceFolderId, newSourceFolderName, p
 	}
 }
 
-func (receiver *GoogleDrive3k) CreateFolder(folderName, parentFolderId string, permissions []*drive.Permission, restricted bool) *drive.File {
+func (receiver *GoogleDrive3k) CreateFolder(folderName, parentFolderId string, permissions []*drive.Permission) (*drive.File, error) {
 	file := &drive.File{}
 	file.MimeType = "application/vnd.google-apps.folder"
 	file.Name = folderName
@@ -312,7 +321,7 @@ func (receiver *GoogleDrive3k) CreateFolder(folderName, parentFolderId string, p
 			log.Println(filesCreateErr.Error())
 			log.Println("Api limit reached. Sleeping for 2 seconds...")
 			time.Sleep(time.Second * 2)
-			return driveFileCreateResponse
+			return driveFileCreateResponse, nil
 		}
 	}
 
@@ -321,18 +330,19 @@ func (receiver *GoogleDrive3k) CreateFolder(folderName, parentFolderId string, p
 			permissionResponse, err := receiver.Service.Permissions.Create(driveFileCreateResponse.Id, permission).SendNotificationEmail(false).Do()
 			if err != nil {
 				log.Println(err.Error())
-			} else {
-				log.Printf("Shared \"%s\" [%s] to <%s> as a {%s}", driveFileCreateResponse.Name, driveFileCreateResponse.Id, permission.EmailAddress, permissionResponse.Role)
+				return nil, err
 			}
+			log.Printf("Shared \"%s\" [%s] to <%s> as a {%s}", driveFileCreateResponse.Name, driveFileCreateResponse.Id, permission.EmailAddress, permissionResponse.Role)
+
 		}
 	}
 
 	log.Printf("Created folder %s[%s]", driveFileCreateResponse.Name, driveFileCreateResponse.Id)
-	return driveFileCreateResponse
+	return driveFileCreateResponse, nil
 }
 
 func (receiver *GoogleDrive3k) GetNestedFiles(targetFolderId string) []*drive.File {
-	targetFolder := receiver.GetFileById(targetFolderId)
+	targetFolder, _ := receiver.GetFileById(targetFolderId)
 	log.Println("Pulling Children from folder [" + targetFolder.Id + "] - " + targetFolder.Name)
 	files := receiver.QueryFiles("'" + targetFolder.Id + "' in parents")
 	if files == nil {
@@ -425,7 +435,7 @@ func (receiver *GoogleDrive3k) RemovePermissionByID(fileID, permissionID string,
 	return nil
 }
 
-func (receiver *GoogleDrive3k) ShareFile(fileId, email, accountType, role string, notify bool, doit bool) *drive.Permission {
+func (receiver *GoogleDrive3k) ShareFile(fileId, email, accountType, role string, notify, doit bool) (*drive.Permission, error) {
 
 	if doit {
 		response, err := receiver.Service.
@@ -438,14 +448,14 @@ func (receiver *GoogleDrive3k) ShareFile(fileId, email, accountType, role string
 		if err != nil {
 			log.Printf("Sharing: %s, to: %s as [%s, %s] FAILED", fileId, email, accountType, role)
 			log.Fatalf(err.Error())
-		} else {
-			log.Printf("Sharing: %s, to: %s as [%s, %s] SUCCESS", fileId, email, accountType, role)
+			return nil, err
 		}
-		return response
+		log.Printf("Sharing: %s, to: %s as [%s, %s] SUCCESS", fileId, email, accountType, role)
+		return response, nil
 	}
 
 	log.Printf("Sharing: %s, to: %s as [%s, %s] DID NOT EXECUTE", fileId, email, accountType, role)
-	return &drive.Permission{}
+	return &drive.Permission{}, nil
 
 }
 
@@ -558,27 +568,27 @@ func (receiver *GoogleDrive3k) GetClientDriveFile(file *drive.File) *DriveFile {
 	return localFile
 }
 
-func (df *DriveFile) Save(locationPath string) *DriveFile {
+func (df *DriveFile) Save(locationPath string) (error, *DriveFile) {
 	if df.Blob == nil {
 		log.Printf("Cannot save %s [%s] <https://drive.google.com/drive/folders/%s> because it has no data\n", df.GoogleDriveObject.Name, df.GoogleDriveObject.Id, df.GoogleDriveObject.Parents[0])
-		return df
+		return nil, df
 	}
 	err := os.WriteFile(locationPath+df.GoogleDriveObject.OriginalFilename, df.Blob, os.ModePerm)
 	if err != nil {
 		if err != nil {
 			log.Println(err.Error())
-			return df
+			return nil, df
 		}
 	}
 	fileInfo, err := os.Stat(locationPath + df.GoogleDriveObject.Name)
 	if err != nil {
 		log.Println(err.Error())
-		return df
+		return err, df
 	}
 	df.OSFileInfo = fileInfo
 	log.Printf("Downloaded %s to [%s]\n", df.GoogleDriveObject.Name, locationPath)
 
-	return df
+	return nil, df
 }
 
 func ByteCount(b int64) string {
