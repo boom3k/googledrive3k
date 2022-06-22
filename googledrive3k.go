@@ -18,7 +18,7 @@ import (
 	"time"
 )
 
-var DriveScope = []string{drive.DriveScriptsScope}
+var DriveScope = []string{drive.DriveScope}
 var DriveScopeReadOnly = []string{drive.DriveReadonlyScope}
 
 func BuildNewGoogleDrive3kOAuth2(subject string, scopes []string, clientSecret, authorizationToken []byte, ctx context.Context) *GoogleDrive3k {
