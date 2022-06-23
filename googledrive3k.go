@@ -86,8 +86,8 @@ func (receiver *API) GetAbout() *drive.About {
 	return response
 }
 
-func (receiver *API) GetFileById(fileId string) (*drive.File, error) {
-	file, err := receiver.Service.Files.Get(fileId).Fields("*").SupportsTeamDrives(true).SupportsAllDrives(true).Do()
+func (receiver *API) GetFileById(fileID string) (*drive.File, error) {
+	file, err := receiver.Service.Files.Get(fileID).Fields("*").SupportsTeamDrives(true).SupportsAllDrives(true).Do()
 	if err != nil {
 		if strings.Contains(err.Error(), "Drivefile not found:") {
 			log.Println(err.Error())
@@ -96,9 +96,9 @@ func (receiver *API) GetFileById(fileId string) (*drive.File, error) {
 		log.Println(err.Error())
 		log.Println("Error encountered Sleeping for 2 seconds...")
 		time.Sleep(time.Second * 2)
-		return receiver.GetFileById(fileId)
+		return receiver.GetFileById(fileID)
 	}
-	log.Printf("Returned [%s] -> \"%s\"\n", fileId, file.Name)
+	log.Printf("Returned [%s] -> \"%s\"\n", fileID, file.Name)
 	return file, err
 }
 
@@ -574,4 +574,26 @@ func GetOSMimeType(googleWorkspaceMimeType string) (string, string) {
 	default:
 		return "", ""
 	}
+}
+
+func GetFileIdFromUrl(url string) (string, bool) {
+	isFolder := false
+	acceptedPrefix := "https://drive.google.com"
+	if !strings.Contains(url, acceptedPrefix) {
+		log.Printf("Endpoint: <%s> is not a secured Google Drive link\n", url)
+		return url, false
+	}
+
+	url = strings.Split(url, acceptedPrefix)[1]
+	fileAppendix := "/file/d/"
+	folderAppendix := "/drive/folders/"
+
+	if strings.Contains(url, fileAppendix) {
+		url = strings.Split(url, fileAppendix)[1]
+	} else if strings.Contains(url, folderAppendix) {
+		url = strings.Split(url, folderAppendix)[1]
+		isFolder = true
+	}
+	fileId := strings.Split(url, "/")[0]
+	return fileId, isFolder
 }
