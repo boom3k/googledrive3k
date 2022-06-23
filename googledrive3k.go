@@ -213,6 +213,9 @@ func (receiver *API) UploadFile(filename, parentFolderId string, data []byte) (*
 		Create(&drive.File{Name: filename, Parents: []string{parentFolderId}}).
 		Media(bytes.NewReader(data)).
 		ProgressUpdater(progressUpdater).
+		KeepRevisionForever(true).
+		SupportsAllDrives(true).
+		Fields("*").
 		Do()
 
 	if err != nil {
@@ -514,11 +517,11 @@ func (receiver *API) DownloadFile(file *drive.File) (*DownloadedFile, error) {
 		}
 		file.FileExtension = ext
 		file.OriginalFilename = file.Name + ext
-		response, err = receiver.Service.Files.Export(file.Id, osMimeType).Download()
+		response, err = receiver.Service.Files.Export(file.Id, osMimeType).Fields("*").Download()
 		log.Printf("Drivefile \"%s\" [%s] - Converted from %s to a %s\n", file.Name, file.Id, strings.Split(file.MimeType, "vnd.")[1], osMimeType)
 	} else {
 		log.Printf("Drivefile \"%s\" [%s] - saved as from %s\n", file.Name, file.Id, file.FullFileExtension)
-		response, err = receiver.Service.Files.Get(file.Id).Download()
+		response, err = receiver.Service.Files.Get(file.Id).Fields("*").Download()
 	}
 
 	blob, err = ioutil.ReadAll(response.Body)
