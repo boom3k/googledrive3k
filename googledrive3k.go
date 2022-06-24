@@ -21,7 +21,7 @@ import (
 var DriveScope = []string{drive.DriveScope}
 var DriveScopeReadOnly = []string{drive.DriveReadonlyScope}
 
-func BuildNewGoogleDrive3kOAuth2(subject string, scopes []string, clientSecret, authorizationToken []byte, ctx context.Context) *API {
+func BuildOAuth2(subject string, scopes []string, clientSecret, authorizationToken []byte, ctx context.Context) *API {
 	config, err := google.ConfigFromJSON(clientSecret, scopes...)
 	if err != nil {
 		log.Println(err.Error())
@@ -34,20 +34,20 @@ func BuildNewGoogleDrive3kOAuth2(subject string, scopes []string, clientSecret, 
 		panic(err)
 	}
 	client := config.Client(context.Background(), token)
-	return BuildNewGoogleDrive3k(client, subject, ctx)
+	return Build(client, subject, ctx)
 }
 
-func BuildNewGoogleDrive3kImpersonation(subject string, scopes []string, serviceAccountKey []byte, ctx context.Context) *API {
+func BuildImpersonator(subject string, scopes []string, serviceAccountKey []byte, ctx context.Context) *API {
 	jwt, err := google.JWTConfigFromJSON(serviceAccountKey, scopes...)
 	if err != nil {
 		log.Println(err.Error())
 		panic(err)
 	}
 	jwt.Subject = subject
-	return BuildNewGoogleDrive3k(jwt.Client(ctx), subject, ctx)
+	return Build(jwt.Client(ctx), subject, ctx)
 }
 
-func BuildNewGoogleDrive3k(client *http.Client, subject string, ctx context.Context) *API {
+func Build(client *http.Client, subject string, ctx context.Context) *API {
 	newGoogleDrive3k := &API{}
 	service, err := drive.NewService(ctx, option.WithHTTPClient(client))
 	if err != nil {
@@ -72,8 +72,8 @@ type FileTransfer struct {
 }
 
 type DownloadedFile struct {
-	Drivefile *drive.File
-	Data      []byte
+	FileInfo *drive.File `json:"file_info"`
+	Blob     []byte      `json:"blob"`
 }
 
 func (receiver *API) GetAbout() *drive.About {
@@ -89,7 +89,7 @@ func (receiver *API) GetAbout() *drive.About {
 func (receiver *API) GetFileById(fileID string) (*drive.File, error) {
 	file, err := receiver.Service.Files.Get(fileID).Fields("*").SupportsTeamDrives(true).SupportsAllDrives(true).Do()
 	if err != nil {
-		if strings.Contains(err.Error(), "Drivefile not found:") {
+		if strings.Contains(err.Error(), "FileInfo not found:") {
 			log.Println(err.Error())
 			return nil, err
 		}
@@ -150,7 +150,7 @@ func (receiver *API) CopyFile(fileId, parentFolderId, fileName string) *drive.Fi
 	if err != nil {
 		log.Println(msg + " FAILED...")
 		if strings.Contains(err.Error(), "This file cannot be copied by the user.") {
-			log.Printf("%s\n\tDrivefile Id: %s\n\tDrivefile Name: %s\n\tDrivefile Location: %s\n\n", err.Error(), fileId, fileName, parentFolderId)
+			log.Printf("%s\n\tFileInfo Id: %s\n\tFileInfo Name: %s\n\tFileInfo Location: %s\n\n", err.Error(), fileId, fileName, parentFolderId)
 			return nil
 		}
 		log.Printf("%s\nSleeping for 3 seconds...", err.Error())
@@ -172,7 +172,7 @@ func GetTransferCall(newOwner, fileId string, service *drive.Service) *drive.Per
 
 func (receiver *API) ChangeFileOwner(newOwner, fileId string, doIt bool) *drive.Permission {
 	changeOwnerRequest := GetTransferCall(newOwner, fileId, receiver.Service)
-	msg := "Drivefile [" + fileId + "] old owner [" + receiver.Subject + "] -> new owner [" + newOwner + "] "
+	msg := "FileInfo [" + fileId + "] old owner [" + receiver.Subject + "] -> new owner [" + newOwner + "] "
 	if doIt {
 		response, err := changeOwnerRequest.Do()
 		if err != nil {
@@ -206,7 +206,7 @@ func (receiver *API) ChangeFileOwnerWorker(newOwner, fileId string, doIt bool, w
 func (receiver *API) UploadFile(filename, parentFolderId string, data []byte) (*drive.File, error) {
 
 	progressUpdater := googleapi.ProgressUpdater(func(now, size int64) {
-		log.Printf("Current file: %s [%d of %d]\n", filename, ByteCount(now), ByteCount(int64(len(data))))
+		log.Printf("Current file: %s [%s of %s]\n", filename, ByteCount(now), ByteCount(int64(len(data))))
 	})
 
 	result, err := receiver.Service.Files.
@@ -456,11 +456,11 @@ func (receiver *API) PermissionShareHandler(calls []*drive.PermissionsCreateCall
 					_, err := worker.Do()
 					if err != nil {
 						log.Println(err.Error())
-						log.Printf("FAILED --> Share Drivefile[%s] to %s<%s>", url, user, role)
+						log.Printf("FAILED --> Share FileInfo[%s] to %s<%s>", url, user, role)
 					}
-					log.Printf("SUCCESS --> Share Drivefile[%s] to %s<%s>", url, user, role)
+					log.Printf("SUCCESS --> Share FileInfo[%s] to %s<%s>", url, user, role)
 				} else {
-					log.Printf("DID NOT EXECUTE --> Share Drivefile[%s] to %s<%s>", url, user, role)
+					log.Printf("DID NOT EXECUTE --> Share FileInfo[%s] to %s<%s>", url, user, role)
 				}
 			}(job)
 		}
@@ -508,19 +508,19 @@ func (receiver *API) DownloadFile(file *drive.File) (*DownloadedFile, error) {
 
 	if strings.Contains(file.MimeType, "shortcut") ||
 		strings.Contains(file.MimeType, "folder") {
-		log.Printf("Drivefile \"%s\" [%s] is a %s and will not be downloaded\n", file.Name, file.Id, file.MimeType)
-		return &DownloadedFile{Drivefile: file, Data: blob}, err
+		log.Printf("FileInfo \"%s\" [%s] is a %s and will not be downloaded\n", file.Name, file.Id, file.MimeType)
+		return &DownloadedFile{FileInfo: file, Blob: blob}, err
 	} else if strings.Contains(file.MimeType, "google") {
 		osMimeType, ext := GetOSMimeType(file.MimeType)
 		if osMimeType == "" {
-			return &DownloadedFile{Drivefile: file, Data: blob}, err
+			return &DownloadedFile{FileInfo: file, Blob: blob}, err
 		}
 		file.FileExtension = ext
 		file.OriginalFilename = file.Name + ext
 		response, err = receiver.Service.Files.Export(file.Id, osMimeType).Fields("*").Download()
-		log.Printf("Drivefile \"%s\" [%s] - Converted from %s to a %s\n", file.Name, file.Id, strings.Split(file.MimeType, "vnd.")[1], osMimeType)
+		log.Printf("FileInfo \"%s\" [%s] - Converted from %s to a %s\n", file.Name, file.Id, strings.Split(file.MimeType, "vnd.")[1], osMimeType)
 	} else {
-		log.Printf("Drivefile \"%s\" [%s] - saved as from %s\n", file.Name, file.Id, file.FullFileExtension)
+		log.Printf("FileInfo \"%s\" [%s] - saved as from %s\n", file.Name, file.Id, file.FullFileExtension)
 		response, err = receiver.Service.Files.Get(file.Id).Fields("*").Download()
 	}
 
@@ -533,8 +533,8 @@ func (receiver *API) DownloadFile(file *drive.File) (*DownloadedFile, error) {
 		file.Size = int64(len(blob))
 	}
 
-	log.Printf("Size: %s, Drivefile: \"%s\", ID:[%s], Type: %s\n", ByteCount(int64(len(blob))), file.Name, file.Id, file.MimeType)
-	return &DownloadedFile{Drivefile: file, Data: blob}, err
+	log.Printf("Size: %s, FileInfo: \"%s\", ID:[%s], Type: %s\n", ByteCount(int64(len(blob))), file.Name, file.Id, file.MimeType)
+	return &DownloadedFile{FileInfo: file, Blob: blob}, err
 }
 
 func ByteCount(b int64) string {
